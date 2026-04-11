@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check S3 buckets for public ACL grants.
+"""Check S3 buckets for public exposure via ACL or bucket policy.
 
 Usage: python3 s3_auditor.py <buckets.json>
 """
@@ -30,16 +30,35 @@ def check_public_acl(bucket):
     return out
 
 
+def _principal_is_public(principal):
+    if principal == "*":
+        return True
+    if isinstance(principal, dict):
+        aws = principal.get("AWS")
+        return aws == "*" or (isinstance(aws, list) and "*" in aws)
+    return False
+
+
+def check_public_policy(bucket):
+    out = []
+    for stmt in (bucket.get("Policy") or {}).get("Statement", []):
+        if stmt.get("Effect") != "Allow":
+            continue
+        if _principal_is_public(stmt.get("Principal")) and not stmt.get("Condition"):
+            out.append(f"bucket policy allows public access ({stmt.get('Action', '?')})")
+    return out
+
+
 def main():
     if len(sys.argv) != 2:
         print("usage: s3_auditor.py <buckets.json>")
         sys.exit(1)
     count = 0
     for bucket in load_buckets(sys.argv[1]):
-        for issue in check_public_acl(bucket):
+        for issue in check_public_acl(bucket) + check_public_policy(bucket):
             print(f"{bucket.get('Name', '?')}: {issue}")
             count += 1
-    print(f"\n{count} finding(s)." if count else "No public ACLs found.")
+    print(f"\n{count} finding(s)." if count else "No public exposure found.")
 
 
 if __name__ == "__main__":
