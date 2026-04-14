@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check S3 buckets for public exposure via ACL or bucket policy.
+"""Audit S3 buckets for public exposure and weak hardening.
 
 Usage: python3 s3_auditor.py <buckets.json>
 """
@@ -8,6 +8,8 @@ import sys
 
 ALL_USERS = "http://acs.amazonaws.com/groups/global/AllUsers"
 AUTH_USERS = "http://acs.amazonaws.com/groups/global/AuthenticatedUsers"
+PAB_KEYS = ["BlockPublicAcls", "IgnorePublicAcls", "BlockPublicPolicy",
+            "RestrictPublicBuckets"]
 
 
 def load_buckets(path):
@@ -24,9 +26,9 @@ def check_public_acl(bucket):
         uri = grant.get("Grantee", {}).get("URI", "")
         perm = grant.get("Permission", "?")
         if uri == ALL_USERS:
-            out.append(f"public ACL grant to everyone ({perm})")
+            out.append(("CRITICAL", f"Public ACL grant to everyone ({perm})"))
         elif uri == AUTH_USERS:
-            out.append(f"ACL grant to any AWS account ({perm})")
+            out.append(("HIGH", f"ACL grant to any AWS account ({perm})"))
     return out
 
 
@@ -45,8 +47,47 @@ def check_public_policy(bucket):
         if stmt.get("Effect") != "Allow":
             continue
         if _principal_is_public(stmt.get("Principal")) and not stmt.get("Condition"):
-            out.append(f"bucket policy allows public access ({stmt.get('Action', '?')})")
+            out.append(("CRITICAL",
+                        f"Bucket policy allows public access (Principal *, {stmt.get('Action', '?')})"))
     return out
+
+
+def check_public_access_block(bucket):
+    pab = bucket.get("PublicAccessBlock")
+    if not pab:
+        return [("HIGH", "Block Public Access not configured")]
+    off = [k for k in PAB_KEYS if not pab.get(k)]
+    if off:
+        return [("HIGH", f"Block Public Access incomplete: {', '.join(off)} disabled")]
+    return []
+
+
+def check_encryption(bucket):
+    if not (bucket.get("Encryption") or {}).get("Rules"):
+        return [("MEDIUM", "No default encryption configured")]
+    return []
+
+
+def check_logging(bucket):
+    if not (bucket.get("Logging") or {}).get("LoggingEnabled"):
+        return [("LOW", "Server access logging disabled")]
+    return []
+
+
+def check_versioning(bucket):
+    if (bucket.get("Versioning") or {}).get("Status") != "Enabled":
+        return [("LOW", "Versioning not enabled")]
+    return []
+
+
+CHECKS = [
+    check_public_acl,
+    check_public_policy,
+    check_public_access_block,
+    check_encryption,
+    check_logging,
+    check_versioning,
+]
 
 
 def main():
@@ -55,10 +96,12 @@ def main():
         sys.exit(1)
     count = 0
     for bucket in load_buckets(sys.argv[1]):
-        for issue in check_public_acl(bucket) + check_public_policy(bucket):
-            print(f"{bucket.get('Name', '?')}: {issue}")
-            count += 1
-    print(f"\n{count} finding(s)." if count else "No public exposure found.")
+        name = bucket.get("Name", "?")
+        for check in CHECKS:
+            for severity, title in check(bucket):
+                print(f"[{severity:8}] {name}  {title}")
+                count += 1
+    print(f"\n{count} finding(s)." if count else "No S3 findings.")
 
 
 if __name__ == "__main__":
