@@ -2,8 +2,8 @@
 
 A dependency-free S3 bucket security checker. Standard library only. Give it a
 JSON export of bucket settings and it flags public exposure and missing
-hardening — public ACLs, public bucket policies, gaps in Block Public Access,
-no default encryption, no logging, no versioning — ranked by severity.
+hardening (public ACLs, public bucket policies, gaps in Block Public Access,
+no default encryption, no logging, no versioning), ranked by severity.
 
 ## Why
 
